@@ -12,7 +12,7 @@ func main() {
 	flag.StringVar(&target, "target", "", "echo ping target")
 	flag.Parse()
 
-	pinger, err := ping.NewPinger(target, 5, 30*time.Second, 3*time.Second)
+	pinger, err := ping.NewPinger(target, 5, 30*time.Second, 1*time.Second)
 	if err != nil {
 		panic(err)
 	}

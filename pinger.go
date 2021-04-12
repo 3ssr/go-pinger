@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"time"
 
 	"golang.org/x/net/icmp"
@@ -60,6 +61,8 @@ func NewPinger(
 		timeout:           timeout,
 		interval:          interval,
 		packetRecvChannel: make(chan *Packet, 10),
+		done:              make(chan interface{}, 1),
+		id:                os.Getpid(),
 	}
 
 	return pinger, nil
@@ -129,6 +132,7 @@ func (p *Pinger) Run() error {
 		}
 
 		if p.statistic.RecvCount >= p.count {
+			p.done <- ""
 			return nil
 		}
 	}
@@ -156,7 +160,7 @@ func (p *Pinger) processPkg(pkg *Packet) error {
 }
 
 func (p *Pinger) MatchId(id int) bool {
-	return true
+	return p.id == id
 }
 
 // 处理收到的icmp包
@@ -197,11 +201,15 @@ func (p *Pinger) waitEchoReply(conn *icmp.PacketConn) error {
 					return fmt.Errorf("id not match")
 				}
 
+				timeData := body.Data[0:8]
+				sendTime := bytesToTime(timeData)
+
 				p.packetRecvChannel <- &Packet{
 					Bytes:  bytes,
 					NBytes: dataLength,
 					Seq:    body.Seq,
 					Ttl:    cm.TTL,
+					Rtt:    time.Now().Sub(sendTime),
 					IPAddr: cm.Src.String(),
 				}
 			default:
@@ -213,11 +221,8 @@ func (p *Pinger) waitEchoReply(conn *icmp.PacketConn) error {
 
 func (p *Pinger) sendEchoRequest(conn *icmp.PacketConn) error {
 	data := []byte{}
-
-	// t := append(timeToBytes(time.Now()), uintToBytes(p.Tracker)...)
-	// if remainSize := p.Size - timeSliceLength - trackerLength; remainSize > 0 {
-	// 	t = append(t, bytes.Repeat([]byte{1}, remainSize)...)
-	// }
+	// 将当前时间放入data中，用来计算rtt
+	data = append(timeToBytes(time.Now()))
 
 	body := icmp.Echo{
 		ID:   p.id,
@@ -245,4 +250,21 @@ func (p *Pinger) sendEchoRequest(conn *icmp.PacketConn) error {
 	p.sequence++
 
 	return nil
+}
+
+func bytesToTime(b []byte) time.Time {
+	var nsec int64
+	for i := uint8(0); i < 8; i++ {
+		nsec += int64(b[i]) << ((7 - i) * 8)
+	}
+	return time.Unix(nsec/1000000000, nsec%1000000000)
+}
+
+func timeToBytes(t time.Time) []byte {
+	nsec := t.UnixNano()
+	b := make([]byte, 8)
+	for i := uint8(0); i < 8; i++ {
+		b[i] = byte((nsec >> ((7 - i) * 8)) & 0xff)
+	}
+	return b
 }
