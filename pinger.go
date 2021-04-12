@@ -1,6 +1,7 @@
 package ping
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -35,6 +36,7 @@ type Pinger struct {
 type PingStatistic struct {
 	SentCount int // 发送包的数量
 	RecvCount int // 收到的包的数量
+
 }
 
 type Packet struct {
@@ -53,10 +55,11 @@ func NewPinger(
 	interval time.Duration,
 ) (*Pinger, error) {
 	pinger := &Pinger{
-		target:   target,
-		count:    count,
-		timeout:  timeout,
-		interval: interval,
+		target:            target,
+		count:             count,
+		timeout:           timeout,
+		interval:          interval,
+		packetRecvChannel: make(chan *Packet, 10),
 	}
 
 	return pinger, nil
@@ -76,7 +79,7 @@ func (p *Pinger) Run() error {
 	}
 
 	// 2. 监听ping的响应包
-	conn, err := icmp.ListenPacket("ip4:icmp", "127.0.0.1")
+	conn, err := icmp.ListenPacket("ip4:icmp", "")
 	if err != nil {
 		return err
 	}
@@ -88,7 +91,12 @@ func (p *Pinger) Run() error {
 	}
 
 	defer conn.Close()
-	go p.waitEchoReply(conn)
+	go func() {
+		err := p.waitEchoReply(conn)
+		if err != nil {
+			log.Printf("wait echo reply error %+v\n", err)
+		}
+	}()
 
 	// 4. 声明超时定时器
 	timeout := time.NewTicker(p.timeout)
@@ -131,16 +139,19 @@ func (p *Pinger) CheckTarget() error {
 		return fmt.Errorf("ping target cannot be nil")
 	}
 
-	err := p.resolveTargetAddr()
+	ipAddr, err := net.ResolveIPAddr("ip", p.target)
 	if err != nil {
 		return err
 	}
+
+	p.targetAddr = ipAddr
 
 	return nil
 }
 
 func (p *Pinger) processPkg(pkg *Packet) error {
-	fmt.Print(pkg)
+	p.statistic.RecvCount++
+	p.OnRecv(pkg)
 	return nil
 }
 
@@ -176,8 +187,7 @@ func (p *Pinger) waitEchoReply(conn *icmp.PacketConn) error {
 
 			// 判断icmp响应类型
 			if msg.Type != ipv4.ICMPTypeEchoReply {
-				log.Println("not a echo reply packet")
-				return nil
+				return errors.New("not a echo reply packet")
 			}
 
 			// 判断icmp响应的id
@@ -192,22 +202,13 @@ func (p *Pinger) waitEchoReply(conn *icmp.PacketConn) error {
 					NBytes: dataLength,
 					Seq:    body.Seq,
 					Ttl:    cm.TTL,
+					IPAddr: cm.Src.String(),
 				}
 			default:
 				return fmt.Errorf("invalid ICMP echo reply; type: '%T'", body)
 			}
 		}
 	}
-}
-
-func (p *Pinger) resolveTargetAddr() error {
-	ipAddr, err := net.ResolveIPAddr("ip", p.target)
-	if err != nil {
-		return err
-	}
-
-	p.targetAddr = ipAddr
-	return nil
 }
 
 func (p *Pinger) sendEchoRequest(conn *icmp.PacketConn) error {
@@ -237,7 +238,7 @@ func (p *Pinger) sendEchoRequest(conn *icmp.PacketConn) error {
 
 	_, err = conn.WriteTo(msgData, p.targetAddr)
 	if err != nil {
-		return err
+		return fmt.Errorf("send echo request failed %v\n", err)
 	}
 
 	p.statistic.SentCount++

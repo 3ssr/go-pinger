@@ -12,17 +12,17 @@ func main() {
 	flag.StringVar(&target, "target", "", "echo ping target")
 	flag.Parse()
 
-	pinger, err := ping.NewPinger(target, 5, 1*time.Second, 3*time.Second)
+	pinger, err := ping.NewPinger(target, 5, 30*time.Second, 3*time.Second)
 	if err != nil {
 		panic(err)
 	}
 
 	pinger.OnRecv = func(pkg *ping.Packet) {
-		fmt.Printf("%d bytes from %s: icmp_seq=%d time=%v ttl=%v\n", pkg.Bytes, pkg.IPAddr, pkg.Seq, pkg.Rtt, pkg.Ttl)
+		fmt.Printf("%d bytes from %s: icmp_seq=%d time=%v ttl=%v\n", pkg.NBytes, pkg.IPAddr, pkg.Seq, pkg.Rtt, pkg.Ttl)
 	}
 
 	pinger.OnFinish = func(statistic ping.PingStatistic) {
-		fmt.Println(statistic)
+		fmt.Printf("on finish %+v\n", statistic)
 	}
 
 	err = pinger.Run()
